@@ -1,0 +1,97 @@
+
+name: ClearStats Traffic Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  browser-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install browser
+        run: |
+          npm install --no-save playwright
+          npx playwright install --with-deps chromium
+
+      - name: Generate 5 test visits
+        run: |
+          node <<'JS'
+          const { chromium } = require('playwright');
+
+          (async () => {
+            const browser = await chromium.launch();
+            let accepted = 0;
+
+            for (let i = 1; i <= 5; i++) {
+              const context = await browser.newContext();
+              const page = await context.newPage();
+
+              let trackerLoaded = false;
+              let collectStatus = [];
+
+              page.on('response', response => {
+                const url = response.url();
+
+                if (url.includes(
+                  '/bloglogistics-clearstats/assets/tracker.min.js'
+                )) {
+                  trackerLoaded = response.ok();
+                }
+
+                if (url.includes(
+                  '/bloglogistics-clearstats/v1/collect'
+                )) {
+                  collectStatus.push(response.status());
+                }
+              });
+
+              try {
+                await page.goto(
+                  'https://www.bloglogistics.com/',
+                  { waitUntil: 'domcontentloaded' }
+                );
+
+                await page.waitForTimeout(5000);
+
+                if (collectStatus.some(
+                  status => status >= 200 && status < 300
+                )) {
+                  accepted++;
+                }
+
+                console.log(
+                  `Visit ${i}/5: ` +
+                  `Tracker loaded=${trackerLoaded}, ` +
+                  `Collection responses=${collectStatus}`
+                );
+              } catch (e) {
+                console.log(
+                  `Visit ${i} failed: ${e.message}`
+                );
+              }
+
+              await context.close();
+              await new Promise(resolve =>
+                setTimeout(resolve, 2000)
+              );
+            }
+
+            await browser.close();
+            console.log(
+              `Collection HTTP successes: ${accepted}/5`
+            );
+          })().catch(error => {
+            console.error(error);
+            process.exit(1);
+          });
+          JS
